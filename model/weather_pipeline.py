@@ -1,42 +1,5 @@
 """
 Africa Extreme Weather Event Prediction - Distributed ML Pipeline
-
-A production-grade distributed machine learning pipeline for predicting
-extreme weather events (droughts, floods, heatwaves) using multi-source
-climate data (GHCN + CHIRPS + ERA5).
-
-ML APPROACH JUSTIFICATION:
---------------------------
-Selected: Gradient Boosting (XGBoost) - Classical ML
-Reasoning:
-  1. Tabular time-series data (not images/text)
-  2. Feature interpretability critical for climate science
-  3. Handles missing data well (common in African weather stations)
-  4. Strong performance on imbalanced datasets (extreme events are rare)
-  5. Efficient distributed training with Spark/Dask
-  6. Lower computational cost than deep learning
-  7. Proven effectiveness in climate prediction literature
-  
-Alternative considered:
-  - LSTM/Deep Learning: Requires dense time-series, expensive compute,
-    less interpretable, African data too sparse
-  - Causal Inference: Would be ideal for policy analysis but requires
-    RCT-like data or strong assumptions; better suited as post-hoc analysis
-
-EXTREME EVENTS DEFINED:
------------------------
-  1. Drought: 30-day cumulative rainfall < 10th percentile
-  2. Flood: Daily rainfall > 95th percentile
-  3. Heatwave: 3+ consecutive days with Tmax > 95th percentile
-  4. Cold spell: 3+ consecutive days with Tmin < 5th percentile
-
-Requirements:
-    pip install pyspark xgboost dask distributed scikit-learn pandas numpy
-    pip install matplotlib seaborn plotly mlflow imbalanced-learn shap
-
-Usage:
-    python africa_extreme_weather_ml.py --mode distributed
-    python africa_extreme_weather_ml.py --mode local --compare
 """
 
 import os
@@ -60,7 +23,7 @@ from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 from pyspark.sql.types import *
 from pyspark.ml.feature import VectorAssembler, StandardScaler
-from pyspark.ml.classification import GBTClassifier
+from pyspark.ml.classification import GBTClassifier, RandomForestClassifier
 from pyspark.ml.evaluation import BinaryClassificationEvaluator, MulticlassClassificationEvaluator
 from pyspark.ml import Pipeline
 
@@ -82,7 +45,14 @@ from sklearn.metrics import (
     mean_squared_error, mean_absolute_error
 )
 from sklearn.preprocessing import StandardScaler as SKStandardScaler
-from imblearn.over_sampling import SMOTE
+
+# Handle SMOTE import with compatibility check
+try:
+    from imblearn.over_sampling import SMOTE
+    SMOTE_AVAILABLE = True
+except ImportError:
+    SMOTE_AVAILABLE = False
+    print("imbalanced-learn not available. Class imbalance handling will use class_weight.")
 
 try:
     import xgboost as xgb
@@ -92,9 +62,9 @@ except ImportError:
     print("XGBoost not available. Will use Spark GBT instead.")
 
 try:
-    # Hey this is really hard to install...
-    # If I manage to in the end, this will be useful
-    import shap 
+    # Failed to actually import shap
+    # Requirements clash with xgboost
+    import shap
     SHAP_AVAILABLE = True
 except ImportError:
     SHAP_AVAILABLE = False
@@ -137,8 +107,7 @@ class ExtremeWeatherConfig:
     CV_FOLDS = 5
     
     # Feature engineering
-    # Use 30 days of history for prediction
-    LOOKBACK_DAYS = 30  
+    LOOKBACK_DAYS = 30  # Use 30 days of history for prediction
     
     # Distributed computing
     SPARK_MEMORY = "8g"
@@ -153,7 +122,8 @@ class ExtremeWeatherConfig:
             dir_path.mkdir(parents=True, exist_ok=True)
 
 
-# DATA INGESTION
+
+# DATA INGESTION - DISTRIBUTED
 
 class DistributedDataIngestion:
     """Distributed data ingestion using Spark"""
@@ -183,7 +153,7 @@ class DistributedDataIngestion:
             )
             
             elapsed = time.time() - start_time
-            print(f"GHCN data ingested: {df.count():,} records in {elapsed:.2f}s")
+            print(f" GHCN data ingested: {df.count():,} records in {elapsed:.2f}s")
             return df
             
         except Exception as e:
@@ -197,16 +167,16 @@ class DistributedDataIngestion:
         
         try:
             if not self.config.CHIRPS_DATA.exists():
-                print(f"CHIRPS data not found at {self.config.CHIRPS_DATA}")
+                print(f"  CHIRPS data not found at {self.config.CHIRPS_DATA}")
                 return self._generate_sample_chirps_data()
             
             df = self.spark.read.parquet(str(self.config.CHIRPS_DATA))
             elapsed = time.time() - start_time
-            print(f"CHIRPS data ingested: {df.count():,} records in {elapsed:.2f}s")
+            print(f" CHIRPS data ingested: {df.count():,} records in {elapsed:.2f}s")
             return df
             
         except Exception as e:
-            print(f"Error ingesting CHIRPS: {e}")
+            print(f"  Error ingesting CHIRPS: {e}")
             return self._generate_sample_chirps_data()
     
     def _generate_sample_ghcn_data(self) -> DataFrame:
@@ -263,7 +233,9 @@ class DistributedDataIngestion:
         return self.spark.createDataFrame(pd.DataFrame(data))
 
 
-# FEATURE ENGINEERING
+
+# FEATURE ENGINEERING - DISTRIBUTED
+
 
 class DistributedFeatureEngineering:
     """Feature engineering using Spark window functions"""
@@ -323,7 +295,7 @@ class DistributedFeatureEngineering:
                            .otherwise(4))
         
         elapsed = time.time() - start_time
-        print(f"Features created in {elapsed:.2f}s")
+        print(f" Features created in {elapsed:.2f}s")
         
         return df
     
@@ -372,7 +344,7 @@ class DistributedFeatureEngineering:
                            .otherwise(0))
         
         elapsed = time.time() - start_time
-        print(f"Labels created in {elapsed:.2f}s")
+        print(f" Labels created in {elapsed:.2f}s")
         
         return df
     
@@ -401,7 +373,7 @@ class DistributedFeatureEngineering:
         return df
 
 
-# MODEL TRAINING
+# MODEL TRAINING - DISTRIBUTED
 
 class DistributedModelTraining:
     """Distributed model training with Spark MLlib and XGBoost"""
@@ -429,7 +401,7 @@ class DistributedModelTraining:
                        [DoubleType(), FloatType(), IntegerType(), LongType()]]
         
         self.feature_cols = feature_cols
-        print(f"✓ Using {len(feature_cols)} features")
+        print(f" Using {len(feature_cols)} features")
         
         # Assemble features
         assembler = VectorAssembler(
@@ -457,54 +429,67 @@ class DistributedModelTraining:
         return df, feature_cols
     
     def train_spark_gbt(self, train_df: DataFrame, test_df: DataFrame) -> Dict:
-        """Train Gradient Boosted Trees using Spark MLlib"""
-        print("\n[Spark MLlib] Training Gradient Boosted Trees...")
+        """Train Random Forest using Spark MLlib (GBT only supports binary classification)"""
+        print("\n[Spark MLlib] Training Random Forest Classifier...")
+        print("Note: Using Random Forest instead of GBT since Spark GBT only supports binary classification")
         start_time = time.time()
         
-        # GBT Classifier
-        gbt = GBTClassifier(
+        # Random Forest Classifier (supports multiclass)
+        rf = RandomForestClassifier(
             featuresCol="features",
             labelCol="label",
-            maxIter=100,
+            numTrees=100,
             maxDepth=5,
-            seed=self.config.RANDOM_STATE
+            seed=self.config.RANDOM_STATE,
+            featureSubsetStrategy="auto"
         )
         
         # Train
-        self.model = gbt.fit(train_df)
+        self.model = rf.fit(train_df)
         training_time = time.time() - start_time
         
         # Predict
         predictions = self.model.transform(test_df)
         
         # Evaluate
-        evaluator_binary = BinaryClassificationEvaluator(
-            labelCol="label",
-            rawPredictionCol="rawPrediction"
-        )
-        
         evaluator_multi = MulticlassClassificationEvaluator(
             labelCol="label",
             predictionCol="prediction"
         )
         
-        auc = evaluator_binary.evaluate(predictions, {evaluator_binary.metricName: "areaUnderROC"})
         accuracy = evaluator_multi.evaluate(predictions, {evaluator_multi.metricName: "accuracy"})
         f1 = evaluator_multi.evaluate(predictions, {evaluator_multi.metricName: "f1"})
+        precision = evaluator_multi.evaluate(predictions, {evaluator_multi.metricName: "weightedPrecision"})
+        recall = evaluator_multi.evaluate(predictions, {evaluator_multi.metricName: "weightedRecall"})
+        
+        # For multiclass, calculate AUC using one-vs-rest approach
+        try:
+            evaluator_binary = BinaryClassificationEvaluator(
+                labelCol="label",
+                rawPredictionCol="rawPrediction"
+            )
+            auc = evaluator_binary.evaluate(predictions, {evaluator_binary.metricName: "areaUnderROC"})
+        except:
+            auc = 0.0
         
         results = {
-            'model_type': 'Spark_GBT',
+            'model_type': 'Spark_RandomForest',
             'training_time': training_time,
             'auc': auc,
             'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
             'f1': f1,
             'predictions': predictions
         }
         
-        print(f"✓ Training completed in {training_time:.2f}s")
-        print(f"  AUC: {auc:.4f}")
+        print(f" Training completed in {training_time:.2f}s")
         print(f"  Accuracy: {accuracy:.4f}")
+        print(f"  Precision: {precision:.4f}")
+        print(f"  Recall: {recall:.4f}")
         print(f"  F1 Score: {f1:.4f}")
+        if auc > 0:
+            print(f"  AUC: {auc:.4f}")
         
         return results
     
@@ -527,10 +512,30 @@ class DistributedModelTraining:
         X_test = np.array(test_pd['features'].tolist())
         y_test = test_pd['label'].values
         
-        # Handle class imbalance with SMOTE
-        print("Applying SMOTE for class imbalance...")
-        smote = SMOTE(random_state=self.config.RANDOM_STATE)
-        X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
+        # Handle class imbalance
+        if SMOTE_AVAILABLE:
+            try:
+                print("Applying SMOTE for class imbalance...")
+                smote = SMOTE(random_state=self.config.RANDOM_STATE)
+                X_train_balanced, y_train_balanced = smote.fit_resample(X_train, y_train)
+            except Exception as e:
+                print(f"SMOTE failed ({e}), using class_weight instead...")
+                X_train_balanced, y_train_balanced = X_train, y_train
+                # Will use scale_pos_weight in XGBoost
+        else:
+            print("Using class_weight for imbalance (SMOTE not available)...")
+            X_train_balanced, y_train_balanced = X_train, y_train
+        
+        # Calculate class weights for XGBoost
+        unique_classes, class_counts = np.unique(y_train_balanced, return_counts=True)
+        total_samples = len(y_train_balanced)
+        n_classes = len(unique_classes)
+        
+        # Compute sample weights (inverse frequency)
+        sample_weights = np.ones(len(y_train_balanced))
+        for cls, count in zip(unique_classes, class_counts):
+            weight = total_samples / (n_classes * count)
+            sample_weights[y_train_balanced == cls] = weight
         
         # Train XGBoost
         xgb_model = xgb.XGBClassifier(
@@ -539,10 +544,11 @@ class DistributedModelTraining:
             learning_rate=0.1,
             random_state=self.config.RANDOM_STATE,
             eval_metric='logloss',
-            use_label_encoder=False
+            use_label_encoder=False,
+            tree_method='hist'  # Faster training
         )
         
-        xgb_model.fit(X_train_balanced, y_train_balanced)
+        xgb_model.fit(X_train_balanced, y_train_balanced, sample_weight=sample_weights)
         training_time = time.time() - start_time
         
         # Predict
@@ -576,7 +582,7 @@ class DistributedModelTraining:
             'y_pred_proba': y_pred_proba
         }
         
-        print(f"✓ Training completed in {training_time:.2f}s")
+        print(f" Training completed in {training_time:.2f}s")
         print(f"  Accuracy: {accuracy:.4f}")
         print(f"  Precision: {precision:.4f}")
         print(f"  Recall: {recall:.4f}")
@@ -617,35 +623,62 @@ class ModelEvaluation:
         """Perform detailed error analysis"""
         print("\nPerforming error analysis...")
         
-        # Confusion matrix
-        cm = confusion_matrix(y_true, y_pred)
+        # Get unique classes present in the data
+        unique_classes = np.union1d(y_true, y_pred)
         
-        # Classification report
+        # Confusion matrix
+        cm = confusion_matrix(y_true, y_pred, labels=unique_classes)
+        
+        # Adjust class names to match actual classes present
         if class_names is None:
             class_names = ['Normal', 'Drought', 'Flood', 'Heatwave', 'Cold']
         
-        report = classification_report(y_true, y_pred, target_names=class_names, 
-                                      output_dict=True, zero_division=0)
+        # Map class indices to names for classes that are present
+        present_class_names = [class_names[int(i)] if int(i) < len(class_names) else f'Class_{int(i)}' 
+                               for i in unique_classes]
+        
+        # Classification report with only present classes
+        report = classification_report(
+            y_true, 
+            y_pred, 
+            labels=unique_classes,
+            target_names=present_class_names, 
+            output_dict=True, 
+            zero_division=0
+        )
         
         # Per-class metrics
         per_class_metrics = {}
-        for i, class_name in enumerate(class_names):
+        for i, class_idx in enumerate(unique_classes):
+            class_name = present_class_names[i]
             if class_name in report:
                 per_class_metrics[class_name] = report[class_name]
         
         results = {
             'confusion_matrix': cm.tolist(),
             'classification_report': report,
-            'per_class_metrics': per_class_metrics
+            'per_class_metrics': per_class_metrics,
+            'unique_classes': unique_classes.tolist(),
+            'present_class_names': present_class_names
         }
         
-        print(" Error analysis complete")
+        print(f" Error analysis complete")
+        print(f"  Classes present in data: {present_class_names}")
         
         return results
     
     def plot_confusion_matrix(self, cm, class_names, save_path):
         """Plot confusion matrix"""
         plt.figure(figsize=(10, 8))
+        
+        # Handle case where cm might be from error_analysis with only present classes
+        if isinstance(cm, list):
+            cm = np.array(cm)
+        
+        # Adjust class names to match confusion matrix size
+        if len(class_names) != cm.shape[0]:
+            class_names = class_names[:cm.shape[0]]
+        
         sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
                    xticklabels=class_names, yticklabels=class_names)
         plt.title('Confusion Matrix - Extreme Weather Events', fontsize=14, fontweight='bold')
@@ -782,10 +815,15 @@ class ExtremeWeatherMLPipeline:
         # Initialize Spark if needed
         if mode in ['distributed', 'spark']:
             self.spark = self._init_spark()
+        elif mode == 'local':
+            print(  "\n" )
+            print("RUNNING IN LOCAL MODE (NO SPARK)")
+            print("-"*70)
+            print("Note: Local mode uses pandas/numpy only, no distributed processing")
     
     def _init_spark(self) -> SparkSession:
         """Initialize Spark session"""
-        print("\n")
+        print(  "\n" )
         print("INITIALIZING SPARK SESSION")
         print("-"*70)
         
@@ -798,14 +836,13 @@ class ExtremeWeatherMLPipeline:
             .getOrCreate()
         
         spark.sparkContext.setLogLevel("WARN")
-        print(f"✓ Spark initialized with {self.config.SPARK_CORES} cores")
-        print(f"✓ Spark version: {spark.version}")
+        print(f" Spark initialized with {self.config.SPARK_CORES} cores")
+        print(f" Spark version: {spark.version}")
         
         return spark
     
     def run(self, compare: bool = False):
         """Run the complete ML pipeline"""
-        print("\n")
         print("AFRICA EXTREME WEATHER EVENT PREDICTION PIPELINE")
         print("-"*70)
         print(f"Mode: {self.mode}")
@@ -814,8 +851,15 @@ class ExtremeWeatherMLPipeline:
         
         pipeline_start = time.time()
         
+        # Check if we're in local mode
+        if self.mode == 'local':
+            return self._run_local_mode()
+        
+        # Otherwise run distributed mode (Spark)
+        return self._run_distributed_mode(compare)
+        
         # Step 1: Data Ingestion
-        print("\n")
+        print(  "\n" )
         print("STEP 1: DATA INGESTION")
         print("-"*70)
         
@@ -823,11 +867,11 @@ class ExtremeWeatherMLPipeline:
         df = ingestion.ingest_ghcn_data()
         
         if df is None:
-            print("Data ingestion failed! Exiting.")
+            print("  Data ingestion failed. Exiting.")
             return
         
         # Step 2: Feature Engineering
-        print("\n")
+        print(  "\n" )
         print("STEP 2: FEATURE ENGINEERING")
         print("-"*70)
         
@@ -837,14 +881,14 @@ class ExtremeWeatherMLPipeline:
         
         # Cache for performance
         df.cache()
-        print(f"\nDataset prepared: {df.count():,} records")
+        print(f"\n Dataset prepared: {df.count():,} records")
         
         # Check class distribution
         print("\nClass distribution:")
         df.groupBy("extreme_event").count().orderBy("extreme_event").show()
         
         # Step 3: Train/Test Split
-        print("\n")
+        print(  "\n" )
         print("STEP 3: TRAIN/TEST SPLIT")
         print("-"*70)
         
@@ -855,7 +899,7 @@ class ExtremeWeatherMLPipeline:
         print(f" Test set: {test_df.count():,} records")
         
         # Step 4: Model Training
-        print("\n")
+        print(  "\n" )
         print("STEP 4: MODEL TRAINING")
         print("-"*70)
         
@@ -872,14 +916,28 @@ class ExtremeWeatherMLPipeline:
             xgb_results = trainer.train_xgboost_local(train_prepared, test_prepared)
         
         # Step 5: Model Evaluation
-        print("\n")
+        print(  "\n" )
         print("STEP 5: MODEL EVALUATION")
         print("-"*70)
         
         evaluator = ModelEvaluation(self.config)
         class_names = ['Normal', 'Drought', 'Flood', 'Heatwave', 'Cold']
         
-        if xgb_results:
+        # Always save the prepared datasets
+        print("\nSaving processed datasets...")
+        train_prepared.write.parquet(
+            str(self.config.PROCESSED_DIR / "train_data.parquet"), 
+            mode='overwrite'
+        )
+        test_prepared.write.parquet(
+            str(self.config.PROCESSED_DIR / "test_data.parquet"), 
+            mode='overwrite'
+        )
+        print(f" Datasets saved to {self.config.PROCESSED_DIR}")
+        
+        # Evaluate based on available models
+        if xgb_results and 'model' in xgb_results:
+            print("\nPerforming detailed evaluation on XGBoost model...")
             # Detailed evaluation for XGBoost
             y_test = xgb_results['y_test']
             y_pred = xgb_results['y_pred']
@@ -932,15 +990,61 @@ class ExtremeWeatherMLPipeline:
             report_path = self.config.RESULTS_DIR / 'evaluation_report.json'
             evaluator.generate_report(all_results, report_path)
         
+        else:
+            print("\nGenerating basic evaluation from Spark predictions...")
+            # Basic evaluation from Spark predictions
+            predictions_pd = spark_results['predictions'].select('label', 'prediction').toPandas()
+            y_test_spark = predictions_pd['label'].values
+            y_pred_spark = predictions_pd['prediction'].values
+            
+            # Error analysis
+            error_results = evaluator.error_analysis(y_test_spark, y_pred_spark, class_names)
+            
+            # Use the actual class names that are present
+            present_class_names = error_results.get('present_class_names', class_names)
+            
+            # Confusion matrix
+            cm_path = self.config.PLOTS_DIR / 'confusion_matrix_spark.png'
+            evaluator.plot_confusion_matrix(
+                error_results['confusion_matrix'], 
+                present_class_names, 
+                cm_path
+            )
+            
+            # Generate basic report
+            basic_results = {**spark_results, **error_results}
+            report_path = self.config.RESULTS_DIR / 'evaluation_report_spark.json'
+            evaluator.generate_report(basic_results, report_path)
+            
+            print(f"\n Basic evaluation complete (run with --compare for detailed XGBoost analysis)")
+        
+        # Save Spark model
+        print(f"\nSaving Spark model...")
+        model_path = str(self.config.MODELS_DIR / "spark_rf_model")
+        trainer.model.write().overwrite().save(model_path)
+        print(f" Spark model saved to {model_path}")
+        
+        # Save feature names
+        feature_info = {
+            'feature_names': feature_names,
+            'n_features': len(feature_names),
+            'timestamp': datetime.now().isoformat()
+        }
+        with open(self.config.MODELS_DIR / 'feature_names.json', 'w') as f:
+            json.dump(feature_info, f, indent=2)
+        print(f" Feature info saved")
+        
         # Step 6: Model Comparison
         if compare and xgb_results:
-            print("\n")
+            print(  "\n" )
             print("STEP 6: MODEL COMPARISON")
             print("-"*70)
             
             comparison = pd.DataFrame({
-                'Model': ['Spark GBT', 'XGBoost'],
+                'Model': ['Spark RF', 'XGBoost'],
                 'Accuracy': [spark_results['accuracy'], xgb_results['accuracy']],
+                'Precision': [spark_results.get('precision', 0), xgb_results['precision']],
+                'Recall': [spark_results.get('recall', 0), xgb_results['recall']],
                 'F1 Score': [spark_results['f1'], xgb_results['f1']],
                 'AUC': [spark_results.get('auc', 0), xgb_results.get('auc', 0)],
                 'Training Time (s)': [spark_results['training_time'], 
@@ -955,6 +1059,7 @@ class ExtremeWeatherMLPipeline:
         # Pipeline summary
         pipeline_time = time.time() - pipeline_start
         
+        print(  "\n" )
         print("PIPELINE COMPLETE")
         print("-"*70)
         print(f"Total time: {pipeline_time:.2f}s")
@@ -964,9 +1069,355 @@ class ExtremeWeatherMLPipeline:
         # Cleanup
         if self.spark:
             self.spark.stop()
+    
+    def _run_local_mode(self):
+        """Run pipeline in local mode without Spark"""
+        print(  "\n" )
+        print("STEP 1: GENERATING SAMPLE DATA (LOCAL MODE)")
+        print("-"*70)
+        
+        pipeline_start = time.time()
+        
+        # Generate sample data as pandas DataFrame
+        print("Generating sample weather data...")
+        dates = pd.date_range('2022-01-01', '2023-12-31', freq='D')
+        stations = [f'STATION_{i:03d}' for i in range(50)]
+        
+        data = []
+        for station in stations:
+            lat = np.random.uniform(-10, 5)
+            lon = np.random.uniform(29, 42)
+            
+            for date in dates:
+                day_of_year = date.dayofyear
+                base_temp = 22 + 5 * np.sin(2 * np.pi * day_of_year / 365)
+                
+                data.append({
+                    'station_id': station,
+                    'date': date,
+                    'latitude': lat,
+                    'longitude': lon,
+                    'tmax': base_temp + np.random.normal(5, 2),
+                    'tmin': base_temp - np.random.normal(5, 2),
+                    'prcp': max(0, np.random.exponential(3))
+                })
+        
+        df = pd.DataFrame(data)
+        print(f" Generated {len(df):,} records")
+        
+        # Step 2: Feature Engineering (Local)
+        print(  "\n" )
+        print("STEP 2: FEATURE ENGINEERING (LOCAL)")
+        print("-"*70)
+        
+        df = self._create_features_local(df)
+        df = self._create_labels_local(df)
+        
+        # Remove rows with NaN
+        df = df.dropna()
+        print(f" Dataset prepared: {len(df):,} records after dropping NaN")
+        
+        # Check class distribution
+        print("\nClass distribution:")
+        print(df['extreme_event'].value_counts().sort_index())
+        
+        # Step 3: Train/Test Split
+        print(  "\n" )
+        print("STEP 3: TRAIN/TEST SPLIT")
+        print("-"*70)
+        
+        # Prepare features
+        feature_cols = [col for col in df.columns if col not in [
+            'station_id', 'date', 'extreme_event', 
+            'is_drought', 'is_flood', 'is_heatwave', 'is_cold_spell'
+        ]]
+        
+        X = df[feature_cols].values
+        y = df['extreme_event'].values
+        
+        X_train, X_test, y_train, y_test = train_test_split(
+            X, y, test_size=self.config.TEST_SIZE, 
+            random_state=self.config.RANDOM_STATE,
+            stratify=y
+        )
+        
+        # Scale features
+        scaler = SKStandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
+        
+        print(f" Training set: {len(X_train):,} records")
+        print(f" Test set: {len(X_test):,} records")
+        print(f" Features: {len(feature_cols)}")
+        
+        # Save processed data
+        print("\nSaving processed datasets...")
+        pd.DataFrame(X_train, columns=feature_cols).to_parquet(
+            self.config.PROCESSED_DIR / "train_features.parquet"
+        )
+        pd.DataFrame(X_test, columns=feature_cols).to_parquet(
+            self.config.PROCESSED_DIR / "test_features.parquet"
+        )
+        pd.DataFrame({'label': y_train}).to_parquet(
+            self.config.PROCESSED_DIR / "train_labels.parquet"
+        )
+        pd.DataFrame({'label': y_test}).to_parquet(
+            self.config.PROCESSED_DIR / "test_labels.parquet"
+        )
+        print(f" Datasets saved to {self.config.PROCESSED_DIR}")
+        
+        # Step 4: Model Training (XGBoost only in local mode)
+        print(  "\n" )
+        print("STEP 4: MODEL TRAINING (XGBOOST)")
+        print("-"*70)
+        
+        if not XGBOOST_AVAILABLE:
+            print("  XGBoost not available. Cannot run local mode without XGBoost.")
+            print("Please install: pip install xgboost")
+            return
+        
+        xgb_results = self._train_xgboost_local_direct(
+            X_train, y_train, X_test, y_test
+        )
+        
+        # Step 5: Model Evaluation
+        print(  "\n" )
+        print("STEP 5: MODEL EVALUATION")
+        print("-"*70)
+        
+        evaluator = ModelEvaluation(self.config)
+        class_names = ['Normal', 'Drought', 'Flood', 'Heatwave', 'Cold']
+        
+        y_pred = xgb_results['y_pred']
+        y_pred_proba = xgb_results['y_pred_proba']
+        
+        # Error analysis
+        error_results = evaluator.error_analysis(y_test, y_pred, class_names)
+        present_class_names = error_results.get('present_class_names', class_names)
+        
+        # Cross-validation
+        cv_results = evaluator.cross_validate(X_test, y_test, xgb_results['model'])
+        
+        # Confusion matrix
+        cm_path = self.config.PLOTS_DIR / 'confusion_matrix.png'
+        evaluator.plot_confusion_matrix(
+            error_results['confusion_matrix'], 
+            present_class_names, 
+            cm_path
+        )
+        
+        # ROC curves
+        roc_path = self.config.PLOTS_DIR / 'roc_curves.png'
+        evaluator.plot_roc_curves(y_test, y_pred_proba, class_names, roc_path)
+        
+        # Feature importance
+        fi_path = self.config.PLOTS_DIR / 'feature_importance.png'
+        evaluator.plot_feature_importance(xgb_results['model'], feature_cols, fi_path)
+        
+        # SHAP analysis
+        if SHAP_AVAILABLE:
+            sample_size = min(1000, len(X_test))
+            shap_path = self.config.PLOTS_DIR / 'shap_analysis.png'
+            evaluator.plot_shap_analysis(
+                xgb_results['model'], 
+                X_test[:sample_size], 
+                feature_cols, 
+                shap_path
+            )
+        
+        # Generate report
+        all_results = {**xgb_results, **error_results, **cv_results}
+        report_path = self.config.RESULTS_DIR / 'evaluation_report.json'
+        evaluator.generate_report(all_results, report_path)
+        
+        # Save model
+        print(f"\nSaving XGBoost model...")
+        xgb_results['model'].save_model(str(self.config.MODELS_DIR / 'xgboost_model.json'))
+        
+        # Save feature names
+        feature_info = {
+            'feature_names': feature_cols,
+            'n_features': len(feature_cols),
+            'timestamp': datetime.now().isoformat()
+        }
+        with open(self.config.MODELS_DIR / 'feature_names.json', 'w') as f:
+            json.dump(feature_info, f, indent=2)
+        print(f" Model and feature info saved to {self.config.MODELS_DIR}")
+        
+        # Pipeline summary
+        pipeline_time = time.time() - pipeline_start
+        
+        print(  "\n" )
+        print("PIPELINE COMPLETE (LOCAL MODE)")
+        print("-"*70)
+        print(f"Total time: {pipeline_time:.2f}s")
+        print(f"\nResults saved to: {self.config.RESULTS_DIR}")
+        print(f"Plots saved to: {self.config.PLOTS_DIR}")
+    
+    def _train_xgboost_local_direct(self, X_train, y_train, X_test, y_test) -> Dict:
+        """Train XGBoost directly on numpy arrays"""
+        print("\n[XGBoost] Training model...")
+        start_time = time.time()
+        
+        # Handle class imbalance
+        if SMOTE_AVAILABLE:
+            try:
+                print("Applying SMOTE for class imbalance...")
+                smote = SMOTE(random_state=self.config.RANDOM_STATE)
+                X_train, y_train = smote.fit_resample(X_train, y_train)
+            except Exception as e:
+                print(f"SMOTE failed ({e}), using class_weight instead...")
+        else:
+            print("Using class_weight for imbalance...")
+        
+        # Calculate sample weights
+        unique_classes, class_counts = np.unique(y_train, return_counts=True)
+        total_samples = len(y_train)
+        n_classes = len(unique_classes)
+        
+        sample_weights = np.ones(len(y_train))
+        for cls, count in zip(unique_classes, class_counts):
+            weight = total_samples / (n_classes * count)
+            sample_weights[y_train == cls] = weight
+        
+        # Train XGBoost
+        xgb_model = xgb.XGBClassifier(
+            n_estimators=100,
+            max_depth=5,
+            learning_rate=0.1,
+            random_state=self.config.RANDOM_STATE,
+            eval_metric='logloss',
+            use_label_encoder=False,
+            tree_method='hist'
+        )
+        
+        xgb_model.fit(X_train, y_train, sample_weight=sample_weights)
+        training_time = time.time() - start_time
+        
+        # Predict
+        y_pred = xgb_model.predict(X_test)
+        y_pred_proba = xgb_model.predict_proba(X_test)
+        
+        # Evaluate
+        accuracy = accuracy_score(y_test, y_pred)
+        precision = precision_score(y_test, y_pred, average='weighted', zero_division=0)
+        recall = recall_score(y_test, y_pred, average='weighted', zero_division=0)
+        f1 = f1_score(y_test, y_pred, average='weighted', zero_division=0)
+        
+        try:
+            auc = roc_auc_score(y_test, y_pred_proba, multi_class='ovr', average='weighted')
+        except:
+            auc = 0.0
+        
+        results = {
+            'model_type': 'XGBoost_Local',
+            'training_time': training_time,
+            'accuracy': accuracy,
+            'precision': precision,
+            'recall': recall,
+            'f1': f1,
+            'auc': auc,
+            'model': xgb_model,
+            'y_pred': y_pred,
+            'y_pred_proba': y_pred_proba
+        }
+        
+        print(f" Training completed in {training_time:.2f}s")
+        print(f"  Accuracy: {accuracy:.4f}")
+        print(f"  Precision: {precision:.4f}")
+        print(f"  Recall: {recall:.4f}")
+        print(f"  F1 Score: {f1:.4f}")
+        print(f"  AUC: {auc:.4f}")
+        
+        return results
+    
+    def _create_features_local(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Create features using pandas"""
+        print("Creating features...")
+        
+        # Sort by station and date
+        df = df.sort_values(['station_id', 'date'])
+        
+        # Rolling statistics
+        for days in [7, 14, 30]:
+            df[f'tmax_rolling_{days}d_mean'] = df.groupby('station_id')['tmax'].transform(
+                lambda x: x.rolling(days, min_periods=1).mean()
+            )
+            df[f'tmax_rolling_{days}d_max'] = df.groupby('station_id')['tmax'].transform(
+                lambda x: x.rolling(days, min_periods=1).max()
+            )
+            df[f'tmin_rolling_{days}d_mean'] = df.groupby('station_id')['tmin'].transform(
+                lambda x: x.rolling(days, min_periods=1).mean()
+            )
+            df[f'tmin_rolling_{days}d_min'] = df.groupby('station_id')['tmin'].transform(
+                lambda x: x.rolling(days, min_periods=1).min()
+            )
+            df[f'prcp_rolling_{days}d_sum'] = df.groupby('station_id')['prcp'].transform(
+                lambda x: x.rolling(days, min_periods=1).sum()
+            )
+            df[f'prcp_rolling_{days}d_mean'] = df.groupby('station_id')['prcp'].transform(
+                lambda x: x.rolling(days, min_periods=1).mean()
+            )
+        
+        # Lag features
+        for lag in [1, 3, 7]:
+            df[f'tmax_lag_{lag}d'] = df.groupby('station_id')['tmax'].shift(lag)
+            df[f'prcp_lag_{lag}d'] = df.groupby('station_id')['prcp'].shift(lag)
+        
+        # Temperature anomaly
+        df['tmax_anomaly'] = df['tmax'] - df['tmax_rolling_30d_mean']
+        df['tmin_anomaly'] = df['tmin'] - df['tmin_rolling_30d_mean']
+        
+        # Temporal features
+        df['month'] = df['date'].dt.month
+        df['day_of_year'] = df['date'].dt.dayofyear
+        df['season'] = df['month'].map(lambda m: 1 if m in [12, 1, 2] else 
+                                                 2 if m in [3, 4, 5] else 
+                                                 3 if m in [6, 7, 8] else 4)
+        
+        print(" Features created")
+        return df
+    
+    def _create_labels_local(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Create extreme event labels using pandas"""
+        print("Creating extreme event labels...")
+        
+        # Calculate thresholds
+        prcp_p10 = df['prcp_rolling_30d_sum'].quantile(0.10)
+        prcp_p95 = df['prcp'].quantile(0.95)
+        tmax_p95 = df['tmax'].quantile(0.95)
+        tmin_p5 = df['tmin'].quantile(0.05)
+        
+        print(f"Thresholds calculated:")
+        print(f"  Drought (prcp < {prcp_p10:.2f} mm/30d)")
+        print(f"  Flood (prcp > {prcp_p95:.2f} mm/day)")
+        print(f"  Heatwave (tmax > {tmax_p95:.2f}°C)")
+        print(f"  Cold spell (tmin < {tmin_p5:.2f}°C)")
+        
+        # Create labels
+        df['is_drought'] = (df['prcp_rolling_30d_sum'] < prcp_p10).astype(int)
+        df['is_flood'] = (df['prcp'] > prcp_p95).astype(int)
+        df['is_heatwave'] = (df['tmax'] > tmax_p95).astype(int)
+        df['is_cold_spell'] = (df['tmin'] < tmin_p5).astype(int)
+        
+        # Multi-class label
+        df['extreme_event'] = 0  # Normal
+        df.loc[df['is_drought'] == 1, 'extreme_event'] = 1
+        df.loc[df['is_flood'] == 1, 'extreme_event'] = 2
+        df.loc[df['is_heatwave'] == 1, 'extreme_event'] = 3
+        df.loc[df['is_cold_spell'] == 1, 'extreme_event'] = 4
+        
+        print(" Labels created")
+        return df
+    
+    def _run_distributed_mode(self, compare: bool = False):
+        """Run pipeline in distributed mode with Spark"""
+        pipeline_start = time.time()
 
 
+# ============================================================================
 # CLI INTERFACE
+# ============================================================================
 
 def main():
     """Main entry point"""
