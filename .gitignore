@@ -1,5 +1,6 @@
 # Virtual Environments
 .venv/
+venv
 
 # Large data files
 ghcn_data/checkpoints/

@@ -1415,9 +1415,7 @@ class ExtremeWeatherMLPipeline:
         pipeline_start = time.time()
 
 
-# ============================================================================
 # CLI INTERFACE
-# ============================================================================
 
 def main():
     """Main entry point"""
@@ -1426,8 +1424,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python africa_extreme_weather_ml.py --mode distributed
-  python africa_extreme_weather_ml.py --mode local --compare
+  python weather_pipeline.py --mode distributed
+  python weather_pipeline.py --mode local --compare
   
 Modes:
   distributed: Use Spark for distributed processing
