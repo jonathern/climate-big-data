@@ -13,7 +13,7 @@ B34976
 ![alt text](ghcn_data/africa_ghcn_analysis_plots/02_regional_distribution.png)
 ![alt text](ghcn_data/africa_ghcn_analysis_plots/04_temperature_analysis.png)
 ![alt text](ghcn_data/africa_ghcn_analysis_plots/05_element_distribution.png)
-![alt text](newplot-2.png)
+![alt text](ghcn_data/africa_ghcn_analysis_plots/01_africa_station_map.png)
 
 ## Machine Learning
 
