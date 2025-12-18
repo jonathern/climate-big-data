@@ -1,0 +1,9 @@
+LICENSE
+README.md
+setup.py
+src/africa_weather_ml.egg-info/PKG-INFO
+src/africa_weather_ml.egg-info/SOURCES.txt
+src/africa_weather_ml.egg-info/dependency_links.txt
+src/africa_weather_ml.egg-info/entry_points.txt
+src/africa_weather_ml.egg-info/requires.txt
+src/africa_weather_ml.egg-info/top_level.txt

@@ -1,0 +1,26 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies including Java for Spark
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    openjdk-17-jre-headless \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Java home
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+
+# Install requirements
+COPY requirements.txt requirements-dev.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-dev.txt
+
+# Copy source code
+COPY . .
+
+# Install package in editable mode
+RUN pip install -e .
+
+# Entry point for training
+ENTRYPOINT ["python", "-m", "src.training.train"]

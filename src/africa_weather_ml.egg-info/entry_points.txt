@@ -1,0 +1,4 @@
+[console_scripts]
+weather-ml-predict = inference.predictor:main
+weather-ml-serve = api.main:run
+weather-ml-train = training.train:main

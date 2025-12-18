@@ -8,3 +8,5 @@ ghcn_data/metadata/
 ghcn_data/processed/
 ghcn_data/raw/
 ghcn_data/staging/
+
+# Not sure this is doing anything for me...

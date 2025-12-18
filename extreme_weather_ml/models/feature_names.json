@@ -1,10 +1,10 @@
 {
   "feature_names": [
-    "prcp",
-    "SNWD",
-    "TAVG",
+    "latitude",
+    "longitude",
     "tmax",
     "tmin",
+    "prcp",
     "tmax_rolling_7d_mean",
     "tmax_rolling_7d_max",
     "tmin_rolling_7d_mean",
@@ -36,5 +36,5 @@
     "season"
   ],
   "n_features": 34,
-  "timestamp": "2025-12-17T00:45:58.111005"
+  "timestamp": "2025-12-18T19:39:02.112071"
 }
