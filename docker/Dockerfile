@@ -1,4 +1,4 @@
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /build
 
@@ -26,7 +26,10 @@ ENV PATH=/root/.local/bin:$PATH
 # Copy application code
 COPY src/ ./src/
 COPY config/ ./config/
-COPY models/ ./models/
+
+# Copy only the trained model, ignoring the processed data
+COPY model/extreme_weather_ml/models/ ./model/extreme_weather_ml/models/
+COPY model/weather_pipeline.py ./model/weather_pipeline.py
 
 # Create non-root user
 RUN useradd -m -u 1000 appuser && \

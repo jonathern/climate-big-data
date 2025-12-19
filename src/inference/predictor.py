@@ -13,34 +13,41 @@ class WeatherPredictor:
         self.model = None
         self.feature_names = []
         self.model_version = "unknown"
+        self._use_raw_booster = False
         
         self._load_model()
         self._load_metadata()
     
     def _load_model(self):
         """Load the trained model"""
+        # Try pickle format first (most reliable for sklearn wrapper)
+        model_file = self.model_path / "model.pkl"
+        if model_file.exists():
+            try:
+                with open(model_file, 'rb') as f:
+                    self.model = pickle.load(f)
+                print(f"✓ Loaded model from {model_file} (pickle format)")
+                return
+            except Exception as e:
+                print(f"Warning: Could not load pickle format: {e}")
+        
         # Try XGBoost JSON format
         model_file = self.model_path / "xgboost_model.json"
         
         if model_file.exists():
             try:
                 import xgboost as xgb
+                # Load the booster
                 booster = xgb.Booster()
                 booster.load_model(str(model_file))
-                self.model = xgb.XGBClassifier()
-                self.model._Booster = booster
-                print(f"✓ Loaded model from {model_file}")
+                
+                # Use raw booster for predictions
+                self.model = booster
+                self._use_raw_booster = True
+                print(f"✓ Loaded XGBoost booster from {model_file}")
                 return
             except Exception as e:
                 print(f"Warning: Could not load JSON format: {e}")
-        
-        # Try pickle format
-        model_file = self.model_path / "model.pkl"
-        if model_file.exists():
-            with open(model_file, 'rb') as f:
-                self.model = pickle.load(f)
-            print(f"✓ Loaded model from {model_file}")
-            return
         
         raise FileNotFoundError(f"No model found at {self.model_path}")
     
@@ -68,8 +75,24 @@ class WeatherPredictor:
     
     def predict(self, features: np.ndarray) -> np.ndarray:
         """Make prediction"""
-        return self.model.predict(features)
+        if self._use_raw_booster:
+            # Use raw booster for prediction
+            import xgboost as xgb
+            dmatrix = xgb.DMatrix(features)
+            probs = self.model.predict(dmatrix)
+            # Get class with highest probability
+            return np.argmax(probs, axis=1)
+        else:
+            # Use sklearn wrapper
+            return self.model.predict(features)
     
     def predict_proba(self, features: np.ndarray) -> np.ndarray:
         """Get prediction probabilities"""
-        return self.model.predict_proba(features)
+        if self._use_raw_booster:
+            # Use raw booster for prediction
+            import xgboost as xgb
+            dmatrix = xgb.DMatrix(features)
+            return self.model.predict(dmatrix)
+        else:
+            # Use sklearn wrapper
+            return self.model.predict_proba(features)
