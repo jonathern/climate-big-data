@@ -49,7 +49,7 @@ async def startup_event():
             logger.info("API will run without model (health checks only)")
     else:
         logger.warning(f"⚠ Model directory not found: {model_path}")
-        logger.info("Run training first: python africa_extreme_weather_ml.py --mode local")
+        logger.info("Run training first: python model/weather_pipeline.py --mode local")
 
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):

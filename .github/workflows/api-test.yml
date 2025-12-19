@@ -1,0 +1,57 @@
+name: API Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test-api:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-asyncio httpx
+    
+    - name: Setup API structure
+      run: |
+        python setup_api.py
+    
+    - name: Test API endpoints
+      run: |
+        python -c "
+        from fastapi.testclient import TestClient
+        from src.api.main import app
+        
+        client = TestClient(app)
+        
+        # Test health endpoint
+        response = client.get('/health')
+        assert response.status_code == 200
+        print('✓ Health endpoint passed')
+        
+        # Test root endpoint
+        response = client.get('/')
+        assert response.status_code == 200
+        assert 'version' in response.json()
+        print('✓ Root endpoint passed')
+        
+        # Test ready endpoint (should be 503 without model)
+        response = client.get('/ready')
+        assert response.status_code == 503
+        print('✓ Ready endpoint passed')
+        
+        print('All API tests passed!')
+        "

@@ -1,0 +1,71 @@
+name: Model Training
+
+on:
+  schedule:
+    # Run weekly on Monday at 00:00 UTC
+    - cron: '0 0 * * 1'
+  workflow_dispatch:  # Allow manual triggering
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+    
+    - name: Train model (local mode)
+      run: |
+        python model/weather_pipeline.py --mode local
+    
+    - name: Upload model artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: trained-models
+        path: |
+          extreme_weather_ml/models/
+          extreme_weather_ml/plots/
+          extreme_weather_ml/results/
+        retention-days: 30
+    
+    - name: Create model summary
+      run: |
+        echo "## Model Training Results" > model_summary.md
+        echo "" >> model_summary.md
+        echo "- **Date**: $(date)" >> model_summary.md
+        echo "- **Python Version**: $(python --version)" >> model_summary.md
+        echo "" >> model_summary.md
+        echo "### Metrics" >> model_summary.md
+        if [ -f extreme_weather_ml/results/evaluation_report.json ]; then
+          python -c "
+        import json
+        with open('extreme_weather_ml/results/evaluation_report.json', 'r') as f:
+            data = json.load(f)
+            print(f'- Accuracy: {data.get(\"accuracy\", \"N/A\")}')
+            print(f'- F1 Score: {data.get(\"f1\", \"N/A\")}')
+            print(f'- AUC: {data.get(\"auc\", \"N/A\")}')
+          " >> model_summary.md
+        fi
+    
+    - name: Comment PR with results
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const summary = fs.readFileSync('model_summary.md', 'utf8');
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: summary

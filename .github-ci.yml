@@ -1,0 +1,86 @@
+stages:
+  - lint
+  - test
+  - build
+  - deploy
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  DOCKER_DRIVER: overlay2
+
+cache:
+  paths:
+    - .cache/pip
+    - venv/
+
+# Lint stage
+lint:
+  stage: lint
+  image: python:3.11-slim
+  before_script:
+    - pip install flake8 black
+  script:
+    - flake8 . --count --max-line-length=127 --statistics --exclude=venv,extreme_weather_ml || true
+    - black --check --exclude="venv|extreme_weather_ml" . || true
+  allow_failure: true
+
+# Test stage
+test:python-3.11:
+  stage: test
+  image: python:3.11-slim
+  before_script:
+    - python -m venv venv
+    - source venv/bin/activate
+    - pip install --upgrade pip
+    - pip install -r requirements.txt
+    - pip install pytest pytest-cov
+  script:
+    - python -c "import africa_extreme_weather_ml; print('✓ Main script imports')"
+    - python -c "from src.api.main import app; print('✓ API imports')"
+    - python -c "from src.inference.predictor import WeatherPredictor; print('✓ Predictor imports')"
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+
+# Build Docker image
+build:docker:
+  stage: build
+  image: docker:24
+  services:
+    - docker:24-dind
+  before_script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
+  script:
+    - docker build -t $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA -f docker/Dockerfile .
+    - docker tag $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA $CI_REGISTRY_IMAGE:latest
+    - docker push $CI_REGISTRY_IMAGE:$CI_COMMIT_SHA
+    - docker push $CI_REGISTRY_IMAGE:latest
+  only:
+    - main
+
+# Deploy to staging
+deploy:staging:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  script:
+    - kubectl config use-context $KUBE_CONTEXT
+    - kubectl set image deployment/weather-ml-api api=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA -n staging
+    - kubectl rollout status deployment/weather-ml-api -n staging
+  environment:
+    name: staging
+    url: https://staging.weather-ml.example.com
+  only:
+    - main
+
+# Deploy to production
+deploy:production:
+  stage: deploy
+  image: bitnami/kubectl:latest
+  script:
+    - kubectl config use-context $KUBE_CONTEXT
+    - kubectl set image deployment/weather-ml-api api=$CI_REGISTRY_IMAGE:$CI_COMMIT_SHA -n production
+    - kubectl rollout status deployment/weather-ml-api -n production
+  environment:
+    name: production
+    url: https://weather-ml.example.com
+  when: manual
+  only:
+    - main
