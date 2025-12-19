@@ -17,6 +17,11 @@ B34976
 
 ## Machine Learning
 
+Running the model
+```
+python ./model/weather_pipeline.py --mode local
+```
+
 ### Key Features
 
 ### ML Approach: Why Gradient Boosting?

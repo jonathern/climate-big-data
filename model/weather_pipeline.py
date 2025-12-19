@@ -38,8 +38,8 @@ Requirements:
     install separately in an isolated environment.
 
 Usage:
-    python africa_extreme_weather_ml.py --mode distributed
-    python africa_extreme_weather_ml.py --mode local --compare
+    python model/weather_pipeline.py --mode distributed
+    python model/weather_ml.py --mode local --compare
 """
 
 import os
