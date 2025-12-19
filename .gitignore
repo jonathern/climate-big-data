@@ -13,5 +13,5 @@ ghcn_data/staging/
 setup_api.py
 
 # html plots
-ghcn_data/africa_ghcn_analysis_plots/01_africa_station_map.html
-ghcn_data/africa_ghcn_analysis_plots_1/01_africa_station_map.html
+# ghcn_data/africa_ghcn_analysis_plots/01_africa_station_map.html
+# ghcn_data/africa_ghcn_analysis_plots_1/01_africa_station_map.html
