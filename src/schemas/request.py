@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, validator
 from typing import Dict, List, Optional
 
 class PredictionRequest(BaseModel):
@@ -6,7 +6,7 @@ class PredictionRequest(BaseModel):
     station_id: str = Field(..., description="Weather station identifier")
     features: Dict[str, float] = Field(..., description="Weather features")
     
-    @field_validator('features')
+    @validator('features')
     def validate_features(cls, v):
         """Validate that required features are present"""
         required_features = ['tmax', 'tmin', 'prcp', 'latitude', 'longitude']

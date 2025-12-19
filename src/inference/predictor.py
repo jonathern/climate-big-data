@@ -32,21 +32,37 @@ class WeatherPredictor:
     
     def _load_model(self):
         """Load the trained model"""
+        # Try loading XGBoost JSON format first
         model_file = self.model_path / "xgboost_model.json"
         
-        if not model_file.exists():
-            # Try loading pickle format
-            model_file = self.model_path / "model.pkl"
-            if model_file.exists():
+        if model_file.exists():
+            try:
+                # Load using native XGBoost booster
+                import xgboost as xgb
+                booster = xgb.Booster()
+                booster.load_model(str(model_file))
+                
+                # Wrap in sklearn interface
+                self.model = xgb.XGBClassifier()
+                self.model._Booster = booster
+                logger.info(f"Loaded XGBoost model from {model_file}")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to load JSON format: {e}")
+        
+        # Try loading pickle format
+        model_file = self.model_path / "model.pkl"
+        if model_file.exists():
+            try:
+                import pickle
                 with open(model_file, 'rb') as f:
                     self.model = pickle.load(f)
-                logger.info(f"Loaded model from {model_file}")
-            else:
-                raise FileNotFoundError(f"No model found at {self.model_path}")
-        else:
-            self.model = xgb.XGBClassifier()
-            self.model.load_model(str(model_file))
-            logger.info(f"Loaded XGBoost model from {model_file}")
+                logger.info(f"Loaded model from {model_file} (pickle format)")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to load pickle format: {e}")
+        
+        raise FileNotFoundError(f"No model found at {self.model_path}")
     
     def _load_metadata(self):
         """Load model metadata"""

@@ -1,5 +1,45 @@
 """
 Africa Extreme Weather Event Prediction - Distributed ML Pipeline
+==================================================================
+A production-grade distributed machine learning pipeline for predicting
+extreme weather events (droughts, floods, heatwaves) using multi-source
+climate data (GHCN + CHIRPS + ERA5).
+
+ML APPROACH JUSTIFICATION:
+--------------------------
+Selected: Gradient Boosting (XGBoost) - Classical ML
+Reasoning:
+  1. Tabular time-series data (not images/text)
+  2. Feature interpretability critical for climate science
+  3. Handles missing data well (common in African weather stations)
+  4. Strong performance on imbalanced datasets (extreme events are rare)
+  5. Efficient distributed training with Spark/Dask
+  6. Lower computational cost than deep learning
+  7. Proven effectiveness in climate prediction literature
+  
+Alternative considered:
+  - LSTM/Deep Learning: Requires dense time-series, expensive compute,
+    less interpretable, African data too sparse
+  - Causal Inference: Would be ideal for policy analysis but requires
+    RCT-like data or strong assumptions; better suited as post-hoc analysis
+
+EXTREME EVENTS DEFINED:
+-----------------------
+  1. Drought: 30-day cumulative rainfall < 10th percentile
+  2. Flood: Daily rainfall > 95th percentile
+  3. Heatwave: 3+ consecutive days with Tmax > 95th percentile
+  4. Cold spell: 3+ consecutive days with Tmin < 5th percentile
+
+Requirements:
+    pip install pyspark xgboost dask distributed scikit-learn pandas numpy
+    pip install matplotlib seaborn plotly mlflow imbalanced-learn
+    
+    Note: SHAP removed due to dependency conflicts. If needed for interpretability,
+    install separately in an isolated environment.
+
+Usage:
+    python africa_extreme_weather_ml.py --mode distributed
+    python africa_extreme_weather_ml.py --mode local --compare
 """
 
 import os
@@ -61,18 +101,14 @@ except ImportError:
     XGBOOST_AVAILABLE = False
     print("XGBoost not available. Will use Spark GBT instead.")
 
-try:
-    # Failed to actually import shap
-    # Requirements clash with xgboost
-    import shap
-    SHAP_AVAILABLE = True
-except ImportError:
-    SHAP_AVAILABLE = False
-    print("SHAP not available. Feature importance analysis limited.")
+# SHAP removed due to dependency conflicts
+SHAP_AVAILABLE = False
 
 warnings.filterwarnings('ignore')
 
+# ============================================================================
 # CONFIGURATION
+# ============================================================================
 
 class ExtremeWeatherConfig:
     """Configuration for extreme weather prediction pipeline"""
@@ -122,8 +158,9 @@ class ExtremeWeatherConfig:
             dir_path.mkdir(parents=True, exist_ok=True)
 
 
-
+# ============================================================================
 # DATA INGESTION - DISTRIBUTED
+# ============================================================================
 
 class DistributedDataIngestion:
     """Distributed data ingestion using Spark"""
@@ -139,7 +176,7 @@ class DistributedDataIngestion:
         
         try:
             if not self.config.GHCN_DATA.exists():
-                print(f"GHCN data not found at {self.config.GHCN_DATA}")
+                print(f"⚠ GHCN data not found at {self.config.GHCN_DATA}")
                 return self._generate_sample_ghcn_data()
             
             df = self.spark.read.parquet(str(self.config.GHCN_DATA))
@@ -153,11 +190,11 @@ class DistributedDataIngestion:
             )
             
             elapsed = time.time() - start_time
-            print(f" GHCN data ingested: {df.count():,} records in {elapsed:.2f}s")
+            print(f"✓ GHCN data ingested: {df.count():,} records in {elapsed:.2f}s")
             return df
             
         except Exception as e:
-            print(f"Error ingesting GHCN: {e}")
+            print(f"✗ Error ingesting GHCN: {e}")
             return self._generate_sample_ghcn_data()
     
     def ingest_chirps_data(self) -> Optional[DataFrame]:
@@ -167,16 +204,16 @@ class DistributedDataIngestion:
         
         try:
             if not self.config.CHIRPS_DATA.exists():
-                print(f"  CHIRPS data not found at {self.config.CHIRPS_DATA}")
+                print(f"⚠ CHIRPS data not found at {self.config.CHIRPS_DATA}")
                 return self._generate_sample_chirps_data()
             
             df = self.spark.read.parquet(str(self.config.CHIRPS_DATA))
             elapsed = time.time() - start_time
-            print(f" CHIRPS data ingested: {df.count():,} records in {elapsed:.2f}s")
+            print(f"✓ CHIRPS data ingested: {df.count():,} records in {elapsed:.2f}s")
             return df
             
         except Exception as e:
-            print(f"  Error ingesting CHIRPS: {e}")
+            print(f"✗ Error ingesting CHIRPS: {e}")
             return self._generate_sample_chirps_data()
     
     def _generate_sample_ghcn_data(self) -> DataFrame:
@@ -233,9 +270,9 @@ class DistributedDataIngestion:
         return self.spark.createDataFrame(pd.DataFrame(data))
 
 
-
+# ============================================================================
 # FEATURE ENGINEERING - DISTRIBUTED
-
+# ============================================================================
 
 class DistributedFeatureEngineering:
     """Feature engineering using Spark window functions"""
@@ -295,7 +332,7 @@ class DistributedFeatureEngineering:
                            .otherwise(4))
         
         elapsed = time.time() - start_time
-        print(f" Features created in {elapsed:.2f}s")
+        print(f"✓ Features created in {elapsed:.2f}s")
         
         return df
     
@@ -344,7 +381,7 @@ class DistributedFeatureEngineering:
                            .otherwise(0))
         
         elapsed = time.time() - start_time
-        print(f" Labels created in {elapsed:.2f}s")
+        print(f"✓ Labels created in {elapsed:.2f}s")
         
         return df
     
@@ -373,7 +410,9 @@ class DistributedFeatureEngineering:
         return df
 
 
+# ============================================================================
 # MODEL TRAINING - DISTRIBUTED
+# ============================================================================
 
 class DistributedModelTraining:
     """Distributed model training with Spark MLlib and XGBoost"""
@@ -401,7 +440,7 @@ class DistributedModelTraining:
                        [DoubleType(), FloatType(), IntegerType(), LongType()]]
         
         self.feature_cols = feature_cols
-        print(f" Using {len(feature_cols)} features")
+        print(f"✓ Using {len(feature_cols)} features")
         
         # Assemble features
         assembler = VectorAssembler(
@@ -483,7 +522,7 @@ class DistributedModelTraining:
             'predictions': predictions
         }
         
-        print(f" Training completed in {training_time:.2f}s")
+        print(f"✓ Training completed in {training_time:.2f}s")
         print(f"  Accuracy: {accuracy:.4f}")
         print(f"  Precision: {precision:.4f}")
         print(f"  Recall: {recall:.4f}")
@@ -521,7 +560,6 @@ class DistributedModelTraining:
             except Exception as e:
                 print(f"SMOTE failed ({e}), using class_weight instead...")
                 X_train_balanced, y_train_balanced = X_train, y_train
-                # Will use scale_pos_weight in XGBoost
         else:
             print("Using class_weight for imbalance (SMOTE not available)...")
             X_train_balanced, y_train_balanced = X_train, y_train
@@ -537,18 +575,31 @@ class DistributedModelTraining:
             weight = total_samples / (n_classes * count)
             sample_weights[y_train_balanced == cls] = weight
         
-        # Train XGBoost
-        xgb_model = xgb.XGBClassifier(
-            n_estimators=100,
-            max_depth=5,
-            learning_rate=0.1,
-            random_state=self.config.RANDOM_STATE,
-            eval_metric='logloss',
-            use_label_encoder=False,
-            tree_method='hist'  # Faster training
-        )
+        # Train XGBoost with proper configuration
+        if n_classes == 2:
+            # Binary classification
+            xgb_model = xgb.XGBClassifier(
+                n_estimators=100,
+                max_depth=5,
+                learning_rate=0.1,
+                random_state=self.config.RANDOM_STATE,
+                eval_metric='logloss',
+                tree_method='hist'
+            )
+        else:
+            # Multiclass classification
+            xgb_model = xgb.XGBClassifier(
+                n_estimators=100,
+                max_depth=5,
+                learning_rate=0.1,
+                random_state=self.config.RANDOM_STATE,
+                eval_metric='mlogloss',
+                tree_method='hist',
+                objective='multi:softprob',
+                num_class=n_classes
+            )
         
-        xgb_model.fit(X_train_balanced, y_train_balanced, sample_weight=sample_weights)
+        xgb_model.fit(X_train_balanced, y_train_balanced, sample_weight=sample_weights, verbose=False)
         training_time = time.time() - start_time
         
         # Predict
@@ -582,7 +633,7 @@ class DistributedModelTraining:
             'y_pred_proba': y_pred_proba
         }
         
-        print(f" Training completed in {training_time:.2f}s")
+        print(f"✓ Training completed in {training_time:.2f}s")
         print(f"  Accuracy: {accuracy:.4f}")
         print(f"  Precision: {precision:.4f}")
         print(f"  Recall: {recall:.4f}")
@@ -592,7 +643,9 @@ class DistributedModelTraining:
         return results
 
 
+# ============================================================================
 # MODEL EVALUATION
+# ============================================================================
 
 class ModelEvaluation:
     """Comprehensive model evaluation and visualization"""
@@ -615,7 +668,7 @@ class ModelEvaluation:
             'cv_scores': cv_scores.tolist()
         }
         
-        print(f" Cross-validation F1: {results['cv_mean']:.4f} (±{results['cv_std']:.4f})")
+        print(f"✓ Cross-validation F1: {results['cv_mean']:.4f} (±{results['cv_std']:.4f})")
         
         return results
     
@@ -662,7 +715,7 @@ class ModelEvaluation:
             'present_class_names': present_class_names
         }
         
-        print(f" Error analysis complete")
+        print(f"✓ Error analysis complete")
         print(f"  Classes present in data: {present_class_names}")
         
         return results
@@ -687,7 +740,7 @@ class ModelEvaluation:
         plt.tight_layout()
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
-        print(f" Confusion matrix saved: {save_path}")
+        print(f"✓ Confusion matrix saved: {save_path}")
     
     def plot_roc_curves(self, y_test, y_pred_proba, class_names, save_path):
         """Plot ROC curves for each class"""
@@ -721,7 +774,7 @@ class ModelEvaluation:
         plt.tight_layout()
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
-        print(f" ROC curves saved: {save_path}")
+        print(f"✓ ROC curves saved: {save_path}")
     
     def plot_feature_importance(self, model, feature_names, save_path, top_n=20):
         """Plot feature importance"""
@@ -743,28 +796,7 @@ class ModelEvaluation:
         plt.tight_layout()
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
-        print(f" Feature importance plot saved: {save_path}")
-    
-    def plot_shap_analysis(self, model, X_sample, feature_names, save_path):
-        """Generate SHAP analysis plots"""
-        if not SHAP_AVAILABLE:
-            print("SHAP not available, skipping...")
-            return
-        
-        print("\nGenerating SHAP analysis...")
-        
-        # Create SHAP explainer
-        explainer = shap.TreeExplainer(model)
-        shap_values = explainer.shap_values(X_sample)
-        
-        # Summary plot
-        plt.figure(figsize=(12, 8))
-        shap.summary_plot(shap_values, X_sample, feature_names=feature_names, 
-                         show=False, max_display=20)
-        plt.tight_layout()
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-        print(f" SHAP analysis saved: {save_path}")
+        print(f"✓ Feature importance plot saved: {save_path}")
     
     def generate_report(self, results: Dict, save_path: Path):
         """Generate comprehensive evaluation report"""
@@ -796,12 +828,14 @@ class ModelEvaluation:
         with open(save_path, 'w') as f:
             json.dump(report, f, indent=2)
         
-        print(f" Evaluation report saved: {save_path}")
+        print(f"✓ Evaluation report saved: {save_path}")
         
         return report
 
 
+# ============================================================================
 # MAIN PIPELINE
+# ============================================================================
 
 class ExtremeWeatherMLPipeline:
     """Main pipeline orchestrator"""
@@ -816,16 +850,16 @@ class ExtremeWeatherMLPipeline:
         if mode in ['distributed', 'spark']:
             self.spark = self._init_spark()
         elif mode == 'local':
-            print(  "\n" )
+            print("\n" + "="*70)
             print("RUNNING IN LOCAL MODE (NO SPARK)")
-            print("-"*70)
+            print("="*70)
             print("Note: Local mode uses pandas/numpy only, no distributed processing")
     
     def _init_spark(self) -> SparkSession:
         """Initialize Spark session"""
-        print(  "\n" )
+        print("\n" + "="*70)
         print("INITIALIZING SPARK SESSION")
-        print("-"*70)
+        print("="*70)
         
         spark = SparkSession.builder \
             .appName("Africa_Extreme_Weather_ML") \
@@ -836,15 +870,16 @@ class ExtremeWeatherMLPipeline:
             .getOrCreate()
         
         spark.sparkContext.setLogLevel("WARN")
-        print(f" Spark initialized with {self.config.SPARK_CORES} cores")
-        print(f" Spark version: {spark.version}")
+        print(f"✓ Spark initialized with {self.config.SPARK_CORES} cores")
+        print(f"✓ Spark version: {spark.version}")
         
         return spark
     
     def run(self, compare: bool = False):
         """Run the complete ML pipeline"""
+        print("\n" + "="*70)
         print("AFRICA EXTREME WEATHER EVENT PREDICTION PIPELINE")
-        print("-"*70)
+        print("="*70)
         print(f"Mode: {self.mode}")
         print(f"Random State: {self.config.RANDOM_STATE}")
         print(f"Test Size: {self.config.TEST_SIZE}")
@@ -859,21 +894,21 @@ class ExtremeWeatherMLPipeline:
         return self._run_distributed_mode(compare)
         
         # Step 1: Data Ingestion
-        print(  "\n" )
+        print("\n" + "="*70)
         print("STEP 1: DATA INGESTION")
-        print("-"*70)
+        print("="*70)
         
         ingestion = DistributedDataIngestion(self.spark, self.config)
         df = ingestion.ingest_ghcn_data()
         
         if df is None:
-            print("  Data ingestion failed. Exiting.")
+            print("✗ Data ingestion failed. Exiting.")
             return
         
         # Step 2: Feature Engineering
-        print(  "\n" )
+        print("\n" + "="*70)
         print("STEP 2: FEATURE ENGINEERING")
-        print("-"*70)
+        print("="*70)
         
         feature_eng = DistributedFeatureEngineering(self.spark, self.config)
         df = feature_eng.create_features(df)
@@ -881,27 +916,27 @@ class ExtremeWeatherMLPipeline:
         
         # Cache for performance
         df.cache()
-        print(f"\n Dataset prepared: {df.count():,} records")
+        print(f"\n✓ Dataset prepared: {df.count():,} records")
         
         # Check class distribution
         print("\nClass distribution:")
         df.groupBy("extreme_event").count().orderBy("extreme_event").show()
         
         # Step 3: Train/Test Split
-        print(  "\n" )
+        print("\n" + "="*70)
         print("STEP 3: TRAIN/TEST SPLIT")
-        print("-"*70)
+        print("="*70)
         
         train_df, test_df = df.randomSplit([1-self.config.TEST_SIZE, self.config.TEST_SIZE], 
                                            seed=self.config.RANDOM_STATE)
         
-        print(f" Training set: {train_df.count():,} records")
-        print(f" Test set: {test_df.count():,} records")
+        print(f"✓ Training set: {train_df.count():,} records")
+        print(f"✓ Test set: {test_df.count():,} records")
         
         # Step 4: Model Training
-        print(  "\n" )
+        print("\n" + "="*70)
         print("STEP 4: MODEL TRAINING")
-        print("-"*70)
+        print("="*70)
         
         trainer = DistributedModelTraining(self.spark, self.config)
         train_prepared, feature_names = trainer.prepare_features(train_df)
@@ -916,9 +951,9 @@ class ExtremeWeatherMLPipeline:
             xgb_results = trainer.train_xgboost_local(train_prepared, test_prepared)
         
         # Step 5: Model Evaluation
-        print(  "\n" )
+        print("\n" + "="*70)
         print("STEP 5: MODEL EVALUATION")
-        print("-"*70)
+        print("="*70)
         
         evaluator = ModelEvaluation(self.config)
         class_names = ['Normal', 'Drought', 'Flood', 'Heatwave', 'Cold']
@@ -933,7 +968,7 @@ class ExtremeWeatherMLPipeline:
             str(self.config.PROCESSED_DIR / "test_data.parquet"), 
             mode='overwrite'
         )
-        print(f" Datasets saved to {self.config.PROCESSED_DIR}")
+        print(f"✓ Datasets saved to {self.config.PROCESSED_DIR}")
         
         # Evaluate based on available models
         if xgb_results and 'model' in xgb_results:
@@ -973,17 +1008,8 @@ class ExtremeWeatherMLPipeline:
                 fi_path
             )
             
-            # SHAP analysis (on sample)
-            if SHAP_AVAILABLE:
-                sample_size = min(1000, len(xgb_results['X_test']))
-                X_sample = xgb_results['X_test'][:sample_size]
-                shap_path = self.config.PLOTS_DIR / 'shap_analysis.png'
-                evaluator.plot_shap_analysis(
-                    xgb_results['model'], 
-                    X_sample, 
-                    feature_names, 
-                    shap_path
-                )
+            # Note: SHAP analysis removed due to dependency conflicts
+            print("\nNote: SHAP analysis skipped (not installed)")
             
             # Generate report
             all_results = {**xgb_results, **error_results, **cv_results}
@@ -1016,13 +1042,33 @@ class ExtremeWeatherMLPipeline:
             report_path = self.config.RESULTS_DIR / 'evaluation_report_spark.json'
             evaluator.generate_report(basic_results, report_path)
             
-            print(f"\n Basic evaluation complete (run with --compare for detailed XGBoost analysis)")
+            print(f"\n✓ Basic evaluation complete (run with --compare for detailed XGBoost analysis)")
         
         # Save Spark model
         print(f"\nSaving Spark model...")
         model_path = str(self.config.MODELS_DIR / "spark_rf_model")
-        trainer.model.write().overwrite().save(model_path)
-        print(f" Spark model saved to {model_path}")
+        try:
+            trainer.model.write().overwrite().save(model_path)
+            print(f"✓ Spark model saved to {model_path}")
+        except Exception as e:
+            print(f"Warning: Could not save Spark model: {e}")
+        
+        # Save XGBoost model if available
+        if xgb_results and 'model' in xgb_results:
+            print(f"\nSaving XGBoost model...")
+            try:
+                # Save using native XGBoost format
+                xgb_model_path = self.config.MODELS_DIR / 'xgboost_model.json'
+                xgb_results['model'].get_booster().save_model(str(xgb_model_path))
+                print(f"✓ XGBoost model saved to {xgb_model_path}")
+            except Exception as e:
+                print(f"Warning: Could not save model in JSON format ({e})")
+                print("Trying pickle format...")
+                import pickle
+                xgb_model_path = self.config.MODELS_DIR / 'model.pkl'
+                with open(xgb_model_path, 'wb') as f:
+                    pickle.dump(xgb_results['model'], f)
+                print(f"✓ XGBoost model saved to {xgb_model_path}")
         
         # Save feature names
         feature_info = {
@@ -1032,13 +1078,13 @@ class ExtremeWeatherMLPipeline:
         }
         with open(self.config.MODELS_DIR / 'feature_names.json', 'w') as f:
             json.dump(feature_info, f, indent=2)
-        print(f" Feature info saved")
+        print(f"✓ Feature info saved")
         
         # Step 6: Model Comparison
         if compare and xgb_results:
-            print(  "\n" )
+            print("\n" + "="*70)
             print("STEP 6: MODEL COMPARISON")
-            print("-"*70)
+            print("="*70)
             
             comparison = pd.DataFrame({
                 'Model': ['Spark RF', 'XGBoost'],
@@ -1059,9 +1105,9 @@ class ExtremeWeatherMLPipeline:
         # Pipeline summary
         pipeline_time = time.time() - pipeline_start
         
-        print(  "\n" )
+        print("\n" + "="*70)
         print("PIPELINE COMPLETE")
-        print("-"*70)
+        print("="*70)
         print(f"Total time: {pipeline_time:.2f}s")
         print(f"\nResults saved to: {self.config.RESULTS_DIR}")
         print(f"Plots saved to: {self.config.PLOTS_DIR}")
@@ -1072,9 +1118,9 @@ class ExtremeWeatherMLPipeline:
     
     def _run_local_mode(self):
         """Run pipeline in local mode without Spark"""
-        print(  "\n" )
+        print("\n" + "="*70)
         print("STEP 1: GENERATING SAMPLE DATA (LOCAL MODE)")
-        print("-"*70)
+        print("="*70)
         
         pipeline_start = time.time()
         
@@ -1103,28 +1149,28 @@ class ExtremeWeatherMLPipeline:
                 })
         
         df = pd.DataFrame(data)
-        print(f" Generated {len(df):,} records")
+        print(f"✓ Generated {len(df):,} records")
         
         # Step 2: Feature Engineering (Local)
-        print(  "\n" )
+        print("\n" + "="*70)
         print("STEP 2: FEATURE ENGINEERING (LOCAL)")
-        print("-"*70)
+        print("="*70)
         
         df = self._create_features_local(df)
         df = self._create_labels_local(df)
         
         # Remove rows with NaN
         df = df.dropna()
-        print(f" Dataset prepared: {len(df):,} records after dropping NaN")
+        print(f"✓ Dataset prepared: {len(df):,} records after dropping NaN")
         
         # Check class distribution
         print("\nClass distribution:")
         print(df['extreme_event'].value_counts().sort_index())
         
         # Step 3: Train/Test Split
-        print(  "\n" )
+        print("\n" + "="*70)
         print("STEP 3: TRAIN/TEST SPLIT")
-        print("-"*70)
+        print("="*70)
         
         # Prepare features
         feature_cols = [col for col in df.columns if col not in [
@@ -1146,9 +1192,9 @@ class ExtremeWeatherMLPipeline:
         X_train = scaler.fit_transform(X_train)
         X_test = scaler.transform(X_test)
         
-        print(f" Training set: {len(X_train):,} records")
-        print(f" Test set: {len(X_test):,} records")
-        print(f" Features: {len(feature_cols)}")
+        print(f"✓ Training set: {len(X_train):,} records")
+        print(f"✓ Test set: {len(X_test):,} records")
+        print(f"✓ Features: {len(feature_cols)}")
         
         # Save processed data
         print("\nSaving processed datasets...")
@@ -1164,15 +1210,15 @@ class ExtremeWeatherMLPipeline:
         pd.DataFrame({'label': y_test}).to_parquet(
             self.config.PROCESSED_DIR / "test_labels.parquet"
         )
-        print(f" Datasets saved to {self.config.PROCESSED_DIR}")
+        print(f"✓ Datasets saved to {self.config.PROCESSED_DIR}")
         
         # Step 4: Model Training (XGBoost only in local mode)
-        print(  "\n" )
+        print("\n" + "="*70)
         print("STEP 4: MODEL TRAINING (XGBOOST)")
-        print("-"*70)
+        print("="*70)
         
         if not XGBOOST_AVAILABLE:
-            print("  XGBoost not available. Cannot run local mode without XGBoost.")
+            print("✗ XGBoost not available. Cannot run local mode without XGBoost.")
             print("Please install: pip install xgboost")
             return
         
@@ -1181,9 +1227,9 @@ class ExtremeWeatherMLPipeline:
         )
         
         # Step 5: Model Evaluation
-        print(  "\n" )
+        print("\n" + "="*70)
         print("STEP 5: MODEL EVALUATION")
-        print("-"*70)
+        print("="*70)
         
         evaluator = ModelEvaluation(self.config)
         class_names = ['Normal', 'Drought', 'Flood', 'Heatwave', 'Cold']
@@ -1214,16 +1260,8 @@ class ExtremeWeatherMLPipeline:
         fi_path = self.config.PLOTS_DIR / 'feature_importance.png'
         evaluator.plot_feature_importance(xgb_results['model'], feature_cols, fi_path)
         
-        # SHAP analysis
-        if SHAP_AVAILABLE:
-            sample_size = min(1000, len(X_test))
-            shap_path = self.config.PLOTS_DIR / 'shap_analysis.png'
-            evaluator.plot_shap_analysis(
-                xgb_results['model'], 
-                X_test[:sample_size], 
-                feature_cols, 
-                shap_path
-            )
+        # Note: SHAP analysis removed due to dependency conflicts
+        print("\nNote: SHAP analysis skipped (not installed)")
         
         # Generate report
         all_results = {**xgb_results, **error_results, **cv_results}
@@ -1232,7 +1270,27 @@ class ExtremeWeatherMLPipeline:
         
         # Save model
         print(f"\nSaving XGBoost model...")
-        xgb_results['model'].save_model(str(self.config.MODELS_DIR / 'xgboost_model.json'))
+        try:
+            # Save using native XGBoost format (not sklearn wrapper)
+            model_path = self.config.MODELS_DIR / 'xgboost_model.json'
+            xgb_results['model'].get_booster().save_model(str(model_path))
+            print(f"✓ Model saved to {model_path}")
+        except Exception as e:
+            print(f"Warning: Could not save model in JSON format ({e})")
+            print("Trying pickle format...")
+            import pickle
+            model_path = self.config.MODELS_DIR / 'model.pkl'
+            with open(model_path, 'wb') as f:
+                pickle.dump(xgb_results['model'], f)
+            print(f"✓ Model saved to {model_path}")
+        
+        # Save scaler if we created one
+        if hasattr(self, 'scaler') and self.scaler is not None:
+            import pickle
+            scaler_path = self.config.MODELS_DIR / 'scaler.pkl'
+            with open(scaler_path, 'wb') as f:
+                pickle.dump(self.scaler, f)
+            print(f"✓ Scaler saved to {scaler_path}")
         
         # Save feature names
         feature_info = {
@@ -1242,14 +1300,14 @@ class ExtremeWeatherMLPipeline:
         }
         with open(self.config.MODELS_DIR / 'feature_names.json', 'w') as f:
             json.dump(feature_info, f, indent=2)
-        print(f" Model and feature info saved to {self.config.MODELS_DIR}")
+        print(f"✓ Model and feature info saved to {self.config.MODELS_DIR}")
         
         # Pipeline summary
         pipeline_time = time.time() - pipeline_start
         
-        print(  "\n" )
+        print("\n" + "="*70)
         print("PIPELINE COMPLETE (LOCAL MODE)")
-        print("-"*70)
+        print("="*70)
         print(f"Total time: {pipeline_time:.2f}s")
         print(f"\nResults saved to: {self.config.RESULTS_DIR}")
         print(f"Plots saved to: {self.config.PLOTS_DIR}")
@@ -1280,18 +1338,34 @@ class ExtremeWeatherMLPipeline:
             weight = total_samples / (n_classes * count)
             sample_weights[y_train == cls] = weight
         
-        # Train XGBoost
-        xgb_model = xgb.XGBClassifier(
-            n_estimators=100,
-            max_depth=5,
-            learning_rate=0.1,
-            random_state=self.config.RANDOM_STATE,
-            eval_metric='logloss',
-            use_label_encoder=False,
-            tree_method='hist'
-        )
+        # Determine number of classes
+        n_classes = len(np.unique(y_train))
         
-        xgb_model.fit(X_train, y_train, sample_weight=sample_weights)
+        # Train XGBoost with proper configuration
+        if n_classes == 2:
+            # Binary classification
+            xgb_model = xgb.XGBClassifier(
+                n_estimators=100,
+                max_depth=5,
+                learning_rate=0.1,
+                random_state=self.config.RANDOM_STATE,
+                eval_metric='logloss',
+                tree_method='hist'
+            )
+        else:
+            # Multiclass classification
+            xgb_model = xgb.XGBClassifier(
+                n_estimators=100,
+                max_depth=5,
+                learning_rate=0.1,
+                random_state=self.config.RANDOM_STATE,
+                eval_metric='mlogloss',
+                tree_method='hist',
+                objective='multi:softprob',
+                num_class=n_classes
+            )
+        
+        xgb_model.fit(X_train, y_train, sample_weight=sample_weights, verbose=False)
         training_time = time.time() - start_time
         
         # Predict
@@ -1322,7 +1396,7 @@ class ExtremeWeatherMLPipeline:
             'y_pred_proba': y_pred_proba
         }
         
-        print(f" Training completed in {training_time:.2f}s")
+        print(f"✓ Training completed in {training_time:.2f}s")
         print(f"  Accuracy: {accuracy:.4f}")
         print(f"  Precision: {precision:.4f}")
         print(f"  Recall: {recall:.4f}")
@@ -1375,7 +1449,7 @@ class ExtremeWeatherMLPipeline:
                                                  2 if m in [3, 4, 5] else 
                                                  3 if m in [6, 7, 8] else 4)
         
-        print(" Features created")
+        print("✓ Features created")
         return df
     
     def _create_labels_local(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -1407,7 +1481,7 @@ class ExtremeWeatherMLPipeline:
         df.loc[df['is_heatwave'] == 1, 'extreme_event'] = 3
         df.loc[df['is_cold_spell'] == 1, 'extreme_event'] = 4
         
-        print(" Labels created")
+        print("✓ Labels created")
         return df
     
     def _run_distributed_mode(self, compare: bool = False):
@@ -1415,7 +1489,9 @@ class ExtremeWeatherMLPipeline:
         pipeline_start = time.time()
 
 
+# ============================================================================
 # CLI INTERFACE
+# ============================================================================
 
 def main():
     """Main entry point"""
@@ -1424,8 +1500,8 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python weather_pipeline.py --mode distributed
-  python weather_pipeline.py --mode local --compare
+  python africa_extreme_weather_ml.py --mode distributed
+  python africa_extreme_weather_ml.py --mode local --compare
   
 Modes:
   distributed: Use Spark for distributed processing
