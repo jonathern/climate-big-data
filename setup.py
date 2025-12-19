@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="africa-weather-ml",
-    version="1.0.0",
+    version="1.1.0",
     description="Extreme Weather Event Prediction for Africa",
     packages=find_packages(where="src"),
     package_dir={"": "src"},
